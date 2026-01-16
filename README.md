@@ -1,74 +1,165 @@
-# Exoskeleton-Arm
-# EMG-Controlled Exoskeleton Arm
+# ExoHand  
+**An End-to-End EMG-Controlled Exoskeleton Hand System**  
+*signal processing · machine learning · embedded control*
+
+---
 
 ## Overview
-This project aims to develop an **electromyography (EMG)-controlled exoskeleton arm** for upper-limb rehabilitation.  
-The system detects muscle activation signals and translates them into proportional motor control using signal processing and machine-learning methods.  
-Our long-term goal is to create an assistive device that adapts to user-specific movement intent in real time.
+**ExoHand** is an in-progress project to build a **real-time EMG-controlled exoskeleton hand**, integrating signal acquisition, robust preprocessing, intent inference, and hardware actuation.
+
+The project is designed as a **complete control pipeline**, not a standalone model:
+
+raw EMG → preprocessing → windowed representations → intent decoding → actuation
+
+To prioritise robustness and deployability, the current system predicts **high-level hand intent**:
+
+- **Rest**
+- **Open / Extend**
+- **Close / Flex**
+
+This abstraction mirrors how practical assistive devices are controlled and provides a stable foundation for finer-grained finger-level control.
 
 ---
 
-## Data Collection
-All EMG data used in this project was **self-recorded** using surface electrodes placed over the biceps and triceps.
+## Data Sources
+ExoHand intentionally combines **heterogeneous EMG data sources** to stress-test robustness beyond idealised lab conditions.
 
-We recorded across a range of conditions, including:
-- Different contraction intensities  
-- Static holds and dynamic movements  
-- Supination and pronation variations  
-- Isometric, isotonic, and fatigue conditions  
+### GrabMyo Dataset (Previous Study)
+We use EMG data from a previous study recorded with the **GrabMyo system** (32-channel surface EMG, WFDB format).
 
-This custom dataset allowed us to test model robustness against realistic noise and variability.
+- Raw `.dat / .hea` trials ingested directly  
+- Subset of **4 informative channels** selected for modelling  
+- Sliding-window segmentation  
+- Raw gesture labels mapped to functional intent classes  
+- Supports multi-participant, session-level evaluation  
 
----
+### Custom Forearm EMG Recordings
+We also recorded our own EMG data during **hand flex, rest, and extend** using a **2-channel forearm setup**.
 
-## Preprocessing Pipeline
-We built a **custom data preprocessing and filtering pipeline** in Python to clean and prepare the raw EMG signals for analysis.
-
-**Steps include:**
-1. **Band-pass filtering** to isolate the EMG frequency band (typically 20–450 Hz)  
-2. **Rectification and smoothing** to obtain the signal envelope  
-3. **Segmentation and feature extraction** (RMS, mean absolute value, zero-crossings, slope sign changes)  
-4. **Normalization** across trials for model compatibility  
-
-This ensures that all training data is consistent and ready for classification.
+This pipeline is explicitly designed to handle real-world acquisition issues:
+- irregular or noisy timestamps  
+- spikes and motion artefacts  
+- inconsistent units (ADC counts vs volts)  
+- unknown or drifting sampling rate  
 
 ---
 
-## Machine Learning Models
-We’ve tested two models so far:
-- **Random Forest Classifier**  
-- **Logistic Regression Classifier**
+## Signal Processing & Preprocessing
 
-Each was trained to classify muscle activity patterns into distinct movement intentions (e.g., flexion vs. relaxation).  
-Both models achieved around **70 % accuracy**, with ongoing work focused on feature engineering, noise reduction, and testing additional algorithms such as **SVMs**, **CNNs**, and **LSTMs** for temporal pattern recognition.
+### Robust TXT-Based Ingestion (Custom Data)
+Custom EMG logs are parsed using a fault-tolerant loader that:
+- ignores header and metadata lines  
+- extracts numeric values from arbitrarily formatted rows  
+- infers time from the first value and channel signals from trailing values  
 
----
+### Sampling Rate Estimation
+Rather than assuming a fixed sampling frequency:
+- sampling rate is estimated directly from timestamp deltas  
+- median-based estimation with span-based fallback  
+- clamped to physiologically reasonable EMG ranges  
 
-## Hardware Development
-We are currently building the **first exoskeleton prototype**, integrating:
-- A lightweight 3D printed mechanical arm assembly  
-- Servo or linear actuator–based motion control  
-- A microcontroller interface for EMG-to-motion translation  
+### Channel-Level Cleaning
+Each channel undergoes the following preprocessing steps:
+- heuristic ADC → volt conversion  
+- spike detection via sliding median / MAD z-score  
+- spike replacement via linear interpolation  
+- band-pass filtering (20–450 Hz, Nyquist-safe)  
+- full-wave rectification  
+- moving-average envelope extraction  
 
-Future iterations will improve ergonomics, signal stability, and responsiveness.
-
----
-
-## Next Steps
-- Refine preprocessing for real-time performance  
-- Collect more EMG data across multiple users  
-- Integrate trained models with embedded hardware for live testing  
-- Explore adaptive and reinforcement-learning control strategies  
-
----
-
-## Technologies Used
-- **Languages:** Python  
-- **Libraries:** NumPy, SciPy, scikit-learn, matplotlib, pandas  
-- **Hardware:** Surface EMG sensors, Arduino/microcontroller, servo motors, 3D Printed partts  
-- **Tools:** VS Code, GitHub, Jupyter Notebook  
+Diagnostic plots are generated to verify signal quality at each stage.
 
 ---
 
-## Team
-Developed by **Ansh Shetty** as the lead on the software development and **Adhi Sasikumar** as the lead on the hardware development as an independent biomedical engineering project exploring the intersection of **signal processing, machine learning, and human–computer interfaces**.
+## Windowed Feature Extraction
+Signals are segmented into **overlapping windows** (e.g. 100 ms windows with 25 ms stride).
+
+### Per-Channel Features
+- RMS, MAV, variance  
+- waveform length  
+- max amplitude  
+- zero crossings  
+- slope sign changes  
+- Willison amplitude  
+- integrated EMG  
+- mean and median frequency (FFT-based)  
+- envelope mean and max  
+
+### Cross-Channel Features
+- envelope activity ratio  
+- inter-channel correlation  
+
+This produces compact, information-dense representations suitable for low-latency control.
+
+---
+
+## Intent Abstraction
+Raw gestures are mapped to functional intent classes:
+
+0 → Rest
+1 → Close / Flex
+2 → Open / Extend
+
+This reduces label noise and aligns model outputs with actuator-level behaviour.
+
+---
+
+## Models
+
+### Feature-Based Models
+A **Histogram Gradient Boosting Classifier** is trained on extracted features.
+
+- class-balanced training  
+- participant-level train / validation / test splits  
+- EMG-specific data augmentation (gain variation, bias shifts, channel dropout, noise injection)  
+
+This provides a strong, interpretable baseline suitable for embedded deployment.
+
+### Temporal CNN Models
+A lightweight **1D convolutional neural network** is trained directly on downsampled EMG envelopes.
+
+- multi-channel time-series input  
+- temporal convolution and pooling  
+- adaptive temporal aggregation  
+- noise-based augmentation during training  
+
+Evaluation uses participant-held-out splits to test generalisation.
+
+---
+
+## Hardware Integration (In Progress)
+Hardware is a core component of ExoHand and is being developed in parallel with the software stack.
+
+Current work includes:
+- mechanical exoskeleton hand design (3D-printed)  
+- actuator selection and integration  
+- microcontroller interface  
+- intent-to-action mapping (state machine → proportional control)  
+
+The goal is **closed-loop, real-time EMG-driven actuation**.
+
+---
+## Repository Structure
+```
+preprocessing.py              # GrabMyo WFDB preprocessing + feature extraction
+build_intent_dataset.py       # Gesture → intent dataset construction
+model_building.py             # Feature-based ML training and evaluation
+cnn_preprocess.py             # Envelope extraction for CNN input
+cnn_train.py                  # CNN training and evaluation
+preprocess_2ch_txt.py         # Robust preprocessing for custom EMG recordings
+```
+---
+
+## Technologies
+- **Python**
+- **NumPy, SciPy** (signal processing)
+- **scikit-learn** (classical ML)
+- **PyTorch** (CNNs)
+- **WFDB** (biomedical signal ingestion)
+- **Matplotlib** (diagnostics)
+
+---
+
+## Project Status
+**Active development.**  
+Software pipeline largely complete; hardware integration and real-time deployment ongoing.
